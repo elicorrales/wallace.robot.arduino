@@ -6,7 +6,14 @@
 
 
 
-#define ARDUINO_USB_BAUD 115200
+#define ARDUINO_USB_BAUD 9600           // NO USB ERRORS - WRONG CMD RXD - AFTER MULTIPLE TESTS - IT ALSO SEEMS A FAST ENOUGH BAUD FOR RESPONSIVENESS - NO NEED TO INCREASE
+//#define ARDUINO_USB_BAUD 19200
+//#define ARDUINO_USB_BAUD 57600
+//#define ARDUINO_USB_BAUD 74880
+//#define ARDUINO_USB_BAUD 115200
+//#define ARDUINO_USB_BAUD 230400
+//#define ARDUINO_USB_BAUD 250000
+//#define ARDUINO_USB_BAUD 500000
 #define ARDUINO_SERIAL_TO_ROBOCLAW_BAUD 38400
 #define rcRxPin 10
 #define rcTxPin 11
@@ -26,18 +33,12 @@ enum  COMMAND {
   MENU = 0,
   STATUSSTOP = 2,
   STATUSSTART =3,
+  CLRUSBERROR = 4,
+  RSTNUMUSBCMDS = 5,
   VERSION = 20,
-//  VOLTS,
-//  AMPS,
-//  TEMP, 
-//  SPEED,
   STATUS = 24,
-//  FWDM1,
-//  FWDM2,
   STOP = 28,
   FORWARD = 29,
-//  ROTLEFTBACK,
-//  ROTRIGHTBACK,
   BACKWARD = 32,
   LEFT = 33,
   RIGHT = 34
@@ -55,7 +56,8 @@ char param1[MAX_PARM_BUF]  = {'\0'};
 char param2[MAX_PARM_BUF]  = {'\0'};
 
 ////////////// these flags control the program flow.  first we need new data. then we need to parse it. then we execute /////
-bool thereIsAnError = false;
+bool thereIsRoboclawError = false;
+bool thereIsUsbError = false;
 bool newData = false;
 bool usbDataReadyToParse = false;
 bool newCommandIsReady = false;
@@ -83,6 +85,7 @@ int16_t amps1 = 0, amps2 = 0;
 uint16_t temp = 0;
 int32_t prevSpeedM1 = 0, prevSpeedM2 = 0;
 int32_t speedM1 = 0, speedM2 = 0;
+String lastError;
 
 unsigned long prevMillisLastCommand = millis();
 unsigned long nowMillis = millis();
@@ -94,7 +97,7 @@ bool motorM2Rotating = false;
 
 
 SoftwareSerial serial(rcRxPin, rcTxPin);
-RoboClaw roboclaw(&serial, 10000);
+RoboClaw roboclaw(&serial, 10000);                  //38400
 
 ///////////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -102,11 +105,12 @@ RoboClaw roboclaw(&serial, 10000);
 //  Typical Arduino setup
 ///////////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////
+//////////////////////////////////////////
 void setup() {
   //Open Serial and roboclaw serial ports
-  Serial.begin(ARDUINO_USB_BAUD);
-  roboclaw.begin(ARDUINO_SERIAL_TO_ROBOCLAW_BAUD);
+  Serial.begin(ARDUINO_USB_BAUD);                   //115200
+  roboclaw.begin(ARDUINO_SERIAL_TO_ROBOCLAW_BAUD);  //38400
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -120,7 +124,8 @@ void loop() {
 
   // safety and / or status related functions
   stopMotorsIfBeenTooLongSinceLastCommand();
-  readRcVoltsAmpsTempIfBeenTooLongSinceLastTime();
+  //readRcVoltsAmpsTempIfBeenTooLongSinceLastTime();
+  readStatusIfBeenTooLongSinceLastTime();
 
   //these functions will do (or not) something, based on the above global program-flow flags
   //Example:
@@ -150,25 +155,27 @@ void commandHandler() {
   if (!newCommandIsReady) return;
 
   prevMillisLastCommand = millis();
-  numCmdsRxdFromUSB++;
 
   long int cmd = strtol(command, NULL, 10);
 
   if (cmd != STATUS) {
     lastCmdRxdFromUSB = ""; lastCmdRxdFromUSB.concat(cmd);
+    numCmdsRxdFromUSB++;
   }
-  
+ 
+
   switch (cmd) {
 
     //////////////////// Arduino user - instructions /////////////////////////
     case MENU: //help - send list of available commands
       getHelp();
       break;
-/*
-    case 1: //num cmds rxd from USB
-      getNumCmdsRxdFromUSB();
-      break;
-*/
+    case CLRUSBERROR:
+	thereIsUsbError = false;
+        break;
+    case RSTNUMUSBCMDS:
+	numCmdsRxdFromUSB = 0;
+        break;
     case STATUSSTOP:
         stopAutoSendingStatusToHost();
         break;
@@ -179,63 +186,39 @@ void commandHandler() {
     case VERSION: //version
       readRcVersion();
       break;
-    /*
-    case VOLTS: //voltage
-      readRcVoltage(false);
-      break;
-    case AMPS: //amps
-      readRcCurrents(false);
-      break;
-    case TEMP: //temperature
-      readRcTemperature(false);
-      break;
-    */
     case STATUS: //read volts, amps, temp
-      readRcVoltsAmpsTempSpeedsNumCmds();
+      //readRcVoltsAmpsTempSpeedsNumCmds();
+      readStatus();
       break;
-    /*
-    case SPEED: //read both motors speed
-      readRcMotorSpeeds(false);
-      break;
-    */
-    /*
-    // eliminating option to only move one side of robot
-    case FWDM1: //move motor 1 forward
-      rotateLeftSideForward(param1, true);
-      break;
-    case FWDM2: //move motor 2 forward
-      rotateRightSideForward(param1, true);
-      break;
-*/
     case STOP: //stop both motors
       stopMotors();
       break;
     case FORWARD:
+      if (thereIsUsbError) return;
       moveForward();
       break;
-    /*
-    // eliminating option to only move one side of robot
-    case ROTLEFTBACK:
-      rotateLeftSideBackward(param1, true);
-      break;
-    case ROTRIGHTBACK:
-      rotateRightSideBackward(param1, true);
-      break;
-      */
     case BACKWARD:
+      if (thereIsUsbError) return;
       moveBackward();
       break;
     case LEFT:
+      if (thereIsUsbError) return;
       rotateLeft();
       break;
     case RIGHT:
+      if (thereIsUsbError) return;
       rotateRight();
       break;
     default:
-      String error = "{\"error\":\"UNKCMD [";
-      error.concat(lastCmdRxdFromUSB);
-      error.concat("]\"}");
-      Serial.println(error);
+      lastError = "\"UNKCMD [";
+      lastError.concat(lastCmdRxdFromUSB);
+      lastError.concat("]\"");
+      String usbError = "{\"error\":";
+      usbError.concat(lastError);
+      usbError.concat("}");
+      Serial.println(usbError);
+      thereIsUsbError = true;
+      stopMotors();
   }
 
   //this may be optional.. but the Roboclaw takes a certain amount of time to do stuff
@@ -255,7 +238,7 @@ void getHelp() {
   //Serial.println("{\"msg\":\"21 - volts\"}");
   //Serial.println("{\"msg\":\"22 - amps\"}");
   //Serial.println("{\"msg\":\"23 - temp\"}");
-  Serial.println("{\"msg\":\"24 - volts,amps,temp,speeds\"}");
+  Serial.println("{\"msg\":\"24 - one-time status\"}");
   //Serial.println("{\"msg\":\"25 - read speeds\"}");
   //Serial.println("{\"msg\":\"26 - rot M1 fwd\"}");
   //Serial.println("{\"msg\":\"27 - rot M2 fwd\"}");
@@ -303,8 +286,9 @@ void readRcVersion() {
     message.concat("\"}");
     Serial.println(message);
   } else {
-    Serial.println("{\"error\":\"ERRVER\"}");
-    thereIsAnError = true;
+    lastError = "{\"error\":\"ERRVER\"}";
+    Serial.println(lastError);
+    thereIsRoboclawError = true;
   }
 }
 
@@ -331,7 +315,7 @@ void readRcVoltage() {
     Serial.println("ERVOLT");
 #endif
     volts = -1;
-    thereIsAnError = true;
+    thereIsRoboclawError = true;
   }
 }
 
@@ -357,7 +341,7 @@ void readRcCurrents() {
 #endif
     amps1 = -1;
     amps2 = -1;
-    thereIsAnError = true;
+    thereIsRoboclawError = true;
   }
 
 }
@@ -367,8 +351,9 @@ void readRcCurrents() {
    Read the board temperature. Value returned is in 10ths of degrees.
 */
 void readRcTemperature() {
+#if MYDEBUG
   Serial.println("reading temp");
-
+#endif
   if (roboclaw.ReadTemp(address, temp)) {
 #if MYDEBUG
     Serial.println(C2F(temp / 10.0f));
@@ -378,11 +363,11 @@ void readRcTemperature() {
     Serial.println("ERTEMP");
 #endif
     temp = -1;
-    thereIsAnError = true;
+    thereIsRoboclawError = true;
   }
 }
 
-void readRcVoltsAmpsTempSpeedsNumCmds() {
+void readStatus() {
   readRcVoltage();
   readRcCurrents();
   readRcTemperature();
@@ -403,6 +388,10 @@ void readRcVoltsAmpsTempSpeedsNumCmds() {
   results.concat(numCmdsRxdFromUSB);
   results.concat(",\"last\":");
   results.concat(lastCmdRxdFromUSB);
+  if (thereIsUsbError) {
+  	results.concat(",\"error\":");
+	results.concat(lastError);
+  }
   results.concat("}");
   Serial.println(results);
 }
@@ -420,7 +409,7 @@ void readRcMotorSpeeds() {
     Serial.print("ERRDSPM1 : "); Serial.print(rcStatus, HEX); Serial.print(" "); Serial.println(rcValid);
 #endif
     speedM1 = -1;
-    thereIsAnError = true;
+    thereIsRoboclawError = true;
   }
 
   rcStatus = 0; rcValid = false;
@@ -430,7 +419,7 @@ void readRcMotorSpeeds() {
     Serial.print("ERRDSPM2 : "); Serial.print(rcStatus, HEX); Serial.print(" "); Serial.println(rcValid);
 #endif
     speedM2 = -1;
-    thereIsAnError = true;
+    thereIsRoboclawError = true;
   }
 
 #if MYDEBUG
@@ -469,7 +458,7 @@ void rotateLeftSideForward(char* param) {
     motorM1Rotating = true;
   } else {
     Serial.println("{\"error\":\"ERRROTM1F\"}");
-    thereIsAnError = true;
+    thereIsRoboclawError = true;
   }
 }
 
@@ -479,7 +468,7 @@ void rotateRightSideForward(char* param) {
     motorM2Rotating = true;
   } else {
     Serial.println("{\"error\":\"ERRROTM2F\"}");
-    thereIsAnError = true;
+    thereIsRoboclawError = true;
   }
 }
 
@@ -492,7 +481,7 @@ void stopMotors() {
     motorM1Rotating = false;
   } else {
     Serial.println("{\"error\":\"ERRSTOPM1\"}");
-    thereIsAnError = true;
+    thereIsRoboclawError = true;
   }
   if (roboclaw.ForwardM2(address, speed)) {
 #if MYDEBUG
@@ -501,7 +490,7 @@ void stopMotors() {
     motorM2Rotating = false;
   } else {
     Serial.println("{\"error\":\"ERRROTM1F\"}");
-    thereIsAnError = true;
+    thereIsRoboclawError = true;
   }
 }
 
@@ -511,7 +500,7 @@ void rotateLeftSideBackward(char* param) {
     motorM1Rotating = true;
   } else {
     Serial.println("{\"error\":\"ERRROTM1B\"}");
-    thereIsAnError = true;
+    thereIsRoboclawError = true;
   }
 }
 
@@ -521,7 +510,7 @@ void rotateRightSideBackward(char* param) {
     motorM2Rotating = true;
   } else {
     Serial.println("{\"error\":\"ERRROTM2B\"}");
-    thereIsAnError = true;
+    thereIsRoboclawError = true;
   }
 }
 
@@ -658,11 +647,13 @@ void stopMotorsIfBeenTooLongSinceLastCommand() {
   }
 }
 
-void readRcVoltsAmpsTempIfBeenTooLongSinceLastTime() {
+//void readRcVoltsAmpsTempIfBeenTooLongSinceLastTime() {
+void readStatusIfBeenTooLongSinceLastTime() {
     nowMillis = millis();
     if (continueToAutoSendStatusToHost && ((nowMillis - prevMillisLastTimeAutoSentStatus) > autoSendStatusTimeout)) {
       prevMillisLastTimeAutoSentStatus = millis();
-      readRcVoltsAmpsTempSpeedsNumCmds();      
+      //readRcVoltsAmpsTempSpeedsNumCmds();      
+      readStatus();      
     }
 }
 
