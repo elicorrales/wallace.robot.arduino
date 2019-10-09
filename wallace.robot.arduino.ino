@@ -44,7 +44,11 @@ enum  COMMAND {
   FORWARD = 29,
   BACKWARD = 32,
   LEFT = 33,
-  RIGHT = 34
+  RIGHT = 34,
+  FWDRESP = 35,
+  BCKRESP = 36,
+  LFTRESP = 37,
+  RITRESP = 38
 };
 
 
@@ -55,6 +59,8 @@ char receivedChars[MAX_USB_RX_BUF];   // an array to store the received data
 
 /////////////// these small buffers store whatever was parsed from the above input USB serial buffer ////////////
 char command[MAX_CMD_BUF] = {'\0'};
+char randNum[MAX_PARM_BUF] = {'\0'};
+char chksum[MAX_PARM_BUF] = {'\0'};
 char param1[MAX_PARM_BUF]  = {'\0'};
 char param2[MAX_PARM_BUF]  = {'\0'};
 
@@ -62,9 +68,8 @@ char param2[MAX_PARM_BUF]  = {'\0'};
 bool thereIsRoboclawError = false;
 bool thereIsUsbError = false;
 bool newData = false;
-bool usbDataReadyToParse = false;
 bool newCommandIsReady = false;
-
+bool respond = false;
 
 ///////////// for every command we incr this.  the host can request this value. if arduino had reset, this value would
 ///////////// start at 0 again, indicating a problem.
@@ -127,7 +132,6 @@ void loop() {
 
   // safety and / or status related functions
   stopMotorsIfBeenTooLongSinceLastCommand();
-  //readRcVoltsAmpsTempIfBeenTooLongSinceLastTime();
   readStatusIfBeenTooLongSinceLastTime();
 
   //these functions will do (or not) something, based on the above global program-flow flags
@@ -136,7 +140,6 @@ void loop() {
   //  usbDataReadyToParse
   //  newCommandIsReady
   recvIncomingUsbSerialWithEndMarker();
-  showIncomingUsbSerial();
   parseIncomingUsbSerial();
   commandHandler();
 
@@ -196,22 +199,39 @@ void commandHandler() {
     case STOP: //stop both motors
       stopMotors();
       break;
+    case FWDRESP:
+      stopAutoSendingStatusToHost();
+      respond = true;
     case FORWARD:
       if (thereIsUsbError) return;
       moveForward();
+      if (respond) readStatus();
       break;
+    case BCKRESP:
+      stopAutoSendingStatusToHost();
+      respond = true;
     case BACKWARD:
       if (thereIsUsbError) return;
       moveBackward();
+      if (respond) readStatus();
       break;
+    case LFTRESP:
+      stopAutoSendingStatusToHost();
+      respond = true;
     case LEFT:
       if (thereIsUsbError) return;
       rotateLeft();
+      if (respond) readStatus();
       break;
+    case RITRESP:
+      stopAutoSendingStatusToHost();
+      respond = true;
     case RIGHT:
       if (thereIsUsbError) return;
       rotateRight();
+      if (respond) readStatus();
       break;
+    
     default:
       lastError = "\"UNKCMD [";
       lastError.concat(lastCmdRxdFromUSB);
@@ -229,8 +249,8 @@ void commandHandler() {
   // interfering during that time.
   delay(10);
 
-  usbDataReadyToParse = false;
   newCommandIsReady = false;
+  newData = false;
 }
 
 //////////////////// Arduino user - instructions functions /////////////////////////
@@ -238,24 +258,22 @@ void commandHandler() {
 //////////////////// Arduino user - instructions functions /////////////////////////
 void getHelp() {
   Serial.println("{\"msg\":\"20 - version\"}");
-  //Serial.println("{\"msg\":\"21 - volts\"}");
-  //Serial.println("{\"msg\":\"22 - amps\"}");
-  //Serial.println("{\"msg\":\"23 - temp\"}");
   Serial.println("{\"msg\":\"24 - one-time status\"}");
-  //Serial.println("{\"msg\":\"25 - read speeds\"}");
-  //Serial.println("{\"msg\":\"26 - rot M1 fwd\"}");
-  //Serial.println("{\"msg\":\"27 - rot M2 fwd\"}");
   Serial.println("{\"msg\":\"28 - stop motors\"}");
-  Serial.println("{\"msg\":\"29 - move forward <spd> <spd>\"}");
-  //Serial.println("{\"msg\":\"30 - rot M1 bck\"}");
-  //Serial.println("{\"msg\":\"31 - rot M2 bck\"}");
-  Serial.println("{\"msg\":\"32 - move back <spd> <spd>\"}");
-  Serial.println("{\"msg\":\"33 - rot left <spd> <spd>\"}");
-  Serial.println("{\"msg\":\"34 - rot right <spd> <spd>\"}");
+  Serial.println("{\"msg\":\"29 - forward <spd> <spd>\"}");
+  Serial.println("{\"msg\":\"32 - back <spd> <spd>\"}");
+  Serial.println("{\"msg\":\"33 - left <spd> <spd>\"}");
+  Serial.println("{\"msg\":\"34 - right <spd> <spd>\"}");
+  Serial.println("{\"msg\":\"35 - fwd resp<spd> <spd>\"}");
+  Serial.println("{\"msg\":\"36 - back resp <spd> <spd>\"}");
+  Serial.println("{\"msg\":\"37 - left resp<spd> <spd>\"}");
+  Serial.println("{\"msg\":\"38 - right resp <spd> <spd>\"}");
   Serial.println("{\"msg\":\"0 - help\"}");
   Serial.println("{\"msg\":\"1 - num cmds rxd\"}");
   Serial.println("{\"msg\":\"2 - stop auto send status\"}");
   Serial.println("{\"msg\":\"3 - start auto send status <timeout>\"}");
+  Serial.println("{\"msg\":\"4 - clear USB error\"}");
+  Serial.println("{\"msg\":\"5 - reset num USB cmds rxd\"}");
 }
 
 void getNumCmdsRxdFromUSB() {
@@ -275,6 +293,13 @@ void startAutoSendingStatusToHost() {
   autoSendStatusTimeout = strtol(param1, NULL, 10);
 }
 
+void returnCommandResponse(long int cmd) {
+  String results = "{\"ackcmd\":";
+  results.concat(cmd);
+  results.concat("}");
+  Serial.println(results);
+  respond = false;
+}
 
 //////////////////// Roboclaw instructions ////////////////////////////////////////////
 //////////////////// Roboclaw instructions ////////////////////////////////////////////
@@ -303,20 +328,12 @@ void readRcVersion() {
 */
 void readRcVoltage() {
 
-#if MYDEBUG
-  Serial.println("reading voltage");
-#endif
-
   rcValid = false;
   volts = roboclaw.ReadMainBatteryVoltage(address, &rcValid);
   if (rcValid) {
-#if MYDEBUG
-    Serial.println(volts / 10.0f);
-#endif
+
   } else {
-#if MYDEBUG
-    Serial.println("ERVOLT");
-#endif
+
     volts = -1;
     thereIsRoboclawError = true;
   }
@@ -328,20 +345,12 @@ void readRcVoltage() {
    The amps value is calculated by dividing the value by 100.
 */
 void readRcCurrents() {
-#if MYDEBUG
-  Serial.println("reading currents");
-#endif
+
 
   if (roboclaw.ReadCurrents(address, amps1, amps2)) {
-#if MYDEBUG
-    Serial.print(amps1 / 100.0f);
-    Serial.print(" , ");
-    Serial.println(amps2 / 100.0f);
-#endif
+
   } else {
-#if MYDEBUG
-    Serial.println("ERAMPS");
-#endif
+
     amps1 = -1;
     amps2 = -1;
     thereIsRoboclawError = true;
@@ -354,17 +363,11 @@ void readRcCurrents() {
    Read the board temperature. Value returned is in 10ths of degrees.
 */
 void readRcTemperature() {
-#if MYDEBUG
-  Serial.println("reading temp");
-#endif
+
   if (roboclaw.ReadTemp(address, temp)) {
-#if MYDEBUG
-    Serial.println(C2F(temp / 10.0f));
-#endif
+
   } else {
-#if MYDEBUG
-    Serial.println("ERTEMP");
-#endif
+
     temp = -1;
     thereIsRoboclawError = true;
   }
@@ -401,16 +404,11 @@ void readStatus() {
 
 void readRcMotorSpeeds() {
 
-#if MYDEBUG
-  Serial.println("reading motor speeds");
-#endif
 
   rcStatus = 0; rcValid = false;
   speedM1 = roboclaw.ReadSpeedM1(address, &rcStatus, &rcValid);
   if (!rcValid) {
-#if MYDEBUG
-    Serial.print("ERRDSPM1 : "); Serial.print(rcStatus, HEX); Serial.print(" "); Serial.println(rcValid);
-#endif
+
     speedM1 = -1;
     thereIsRoboclawError = true;
   }
@@ -418,21 +416,11 @@ void readRcMotorSpeeds() {
   rcStatus = 0; rcValid = false;
   speedM2 = roboclaw.ReadSpeedM2(address, &rcStatus, &rcValid);
   if (!rcValid) {
-#if MYDEBUG
-    Serial.print("ERRDSPM2 : "); Serial.print(rcStatus, HEX); Serial.print(" "); Serial.println(rcValid);
-#endif
+
     speedM2 = -1;
     thereIsRoboclawError = true;
   }
 
-#if MYDEBUG
-    String results = "{\"s1\":";
-    results.concat(speedM1);
-    results.concat(",\"s2\":");
-    results.concat(speedM2);
-    results.concat("}");
-    Serial.println(results);
-#endif
 }
 
 void moveForward() {
@@ -478,18 +466,14 @@ void rotateRightSideForward(char* param) {
 void stopMotors() {
   uint8_t speed = 0;
   if (roboclaw.ForwardM1(address, speed)) {
-#if MYDEBUG
-    Serial.println("M1 stopped");
-#endif
+
     motorM1Rotating = false;
   } else {
     Serial.println("{\"error\":\"ERRSTOPM1\"}");
     thereIsRoboclawError = true;
   }
   if (roboclaw.ForwardM2(address, speed)) {
-#if MYDEBUG
-    Serial.println("M2 stopped");
-#endif
+
     motorM2Rotating = false;
   } else {
     Serial.println("{\"error\":\"ERRROTM1F\"}");
@@ -541,35 +525,24 @@ void recvIncomingUsbSerialWithEndMarker() {
       receivedChars[ndx] = '\0'; // terminate the string
       ndx = 0;
       newData = true;
-#if MYDEBUG
-      Serial.println("{\"msg\":\"Got end marker.\"}");
-#endif
     }
   }
 
 }
 
-void showIncomingUsbSerial() {
-  if (newData == true) {
-    if (receivedChars[0] != '\n' && receivedChars[0] != ' ' && receivedChars[0] != '\t' && receivedChars[0] != '\r' && receivedChars[0] != 0) {
-#if MYDEBUG      
-      Serial.print("This just in ... ["); Serial.print(receivedChars); Serial.println("]"); }
-#endif
-      usbDataReadyToParse = true;
-    }
-    newData = false;
-  }
-}
 
 void parseIncomingUsbSerial() {
 
-  if (usbDataReadyToParse == true) {
+  if (newData != true) return;
+  
     clearBuffer(command, MAX_CMD_BUF);
+    clearBuffer(randNum, MAX_PARM_BUF);
+    clearBuffer(chksum, MAX_PARM_BUF);
     clearBuffer(param1, MAX_PARM_BUF);
     clearBuffer(param2, MAX_PARM_BUF);
-#if MYDEBUG
-    Serial.println("..parsing..");
-#endif
+
+    //Serial.println("..parsing..");
+
     
     byte ndx = 0;
 
@@ -579,12 +552,12 @@ void parseIncomingUsbSerial() {
       command[ndx] = receivedChars[ndx];
       ndx++;
     }
-#if MYDEBUG
-      Serial.print("command[");
+/*
+      Serial.print(F("command["));
       Serial.print(command);
-      Serial.print("] ");
+      Serial.print(F("]"));
       Serial.println(ndx);
-#endif
+*/
 
     /////   need to get past whitespace (except newline)
     byte sidx = 0;
@@ -593,22 +566,74 @@ void parseIncomingUsbSerial() {
       ndx++;
     }
 
-    /////   extract param1 out of the receive buffer
     byte pidx = 0;
+
+    /////   extract randNum out of the receive buffer
+    pidx = 0;
+    while (ndx < MAX_USB_RX_BUF && pidx < MAX_PARM_BUF - 1 && receivedChars[ndx] != '\n' && receivedChars[ndx] != ' ' && receivedChars[ndx] != '\t' && receivedChars[ndx] != '\r' && receivedChars[ndx] != 0) {
+      //Serial.print(ndx); Serial.print(", ["); Serial.print(receivedChars[ndx]); Serial.println("]");
+      randNum[pidx] = receivedChars[ndx];
+      ndx++;
+      pidx++;
+    }
+/*
+      Serial.print(F("randNum["));
+      Serial.print(randNum);
+      Serial.print(F("] "));
+      Serial.print(pidx);
+      Serial.print(F(" "));
+      Serial.println(ndx);
+*/
+    /////   need to get past whitespace (except newline)
+    sidx = 0;
+    while (ndx < MAX_USB_RX_BUF && (receivedChars[ndx] == ' ' || receivedChars[ndx] == '\t')) {
+      //Serial.print(ndx); Serial.print(", ["); Serial.print(receivedChars[ndx]); Serial.println("]");
+      ndx++;
+    }
+
+
+    /////   extract chksum out of the receive buffer
+    pidx = 0;
+    while (ndx < MAX_USB_RX_BUF && pidx < MAX_PARM_BUF - 1 && receivedChars[ndx] != '\n' && receivedChars[ndx] != ' ' && receivedChars[ndx] != '\t' && receivedChars[ndx] != '\r' && receivedChars[ndx] != 0) {
+      //Serial.print(ndx); Serial.print(", ["); Serial.print(receivedChars[ndx]); Serial.println("]");
+      chksum[pidx] = receivedChars[ndx];
+      ndx++;
+      pidx++;
+    }
+/*
+      Serial.print(F("chksum["));
+      Serial.print(chksum);
+      Serial.print(F("] "));
+      Serial.print(pidx);
+      Serial.print(F(" "));
+      Serial.println(ndx);
+*/
+    /////   need to get past whitespace (except newline)
+    sidx = 0;
+    while (ndx < MAX_USB_RX_BUF && (receivedChars[ndx] == ' ' || receivedChars[ndx] == '\t')) {
+      //Serial.print(ndx); Serial.print(", ["); Serial.print(receivedChars[ndx]); Serial.println("]");
+      ndx++;
+    }
+
+
+
+    /////   extract param1 out of the receive buffer
+    pidx = 0;
     while (ndx < MAX_USB_RX_BUF && pidx < MAX_PARM_BUF - 1 && receivedChars[ndx] != '\n' && receivedChars[ndx] != ' ' && receivedChars[ndx] != '\t' && receivedChars[ndx] != '\r' && receivedChars[ndx] != 0) {
       //Serial.print(ndx); Serial.print(", ["); Serial.print(receivedChars[ndx]); Serial.println("]");
       param1[pidx] = receivedChars[ndx];
       ndx++;
       pidx++;
     }
-#if MYDEBUG
-      Serial.print("param1[");
+
+/*
+      Serial.print(F("param1["));
       Serial.print(param1);
-      Serial.print("] ");
+      Serial.print(F("] "));
       Serial.print(pidx);
-      Serial.print(" ");
+      Serial.print(F(" "));
       Serial.println(ndx);
-#endif
+*/
 
     /////   need to get past whitespace (except newline)
     sidx = 0;
@@ -616,6 +641,8 @@ void parseIncomingUsbSerial() {
       //Serial.print(ndx); Serial.print(", ["); Serial.print(receivedChars[ndx]); Serial.println("]");
       ndx++;
     }
+
+
 
     /////   extract param2 out of the receive buffer
     pidx = 0;
@@ -625,21 +652,61 @@ void parseIncomingUsbSerial() {
       ndx++;
       pidx++;
     }
-#if MYDEBUG
-      Serial.print("param2[");
+/*
+      Serial.print(F("param2["));
       Serial.print(param2);
-      Serial.print("] ");
+      Serial.print(F("] "));
       Serial.print(pidx);
-      Serial.print(" ");
+      Serial.print(F(" "));
       Serial.println(ndx);
-#endif
+*/
 
     clearBuffer(receivedChars, MAX_USB_RX_BUF);
-    newCommandIsReady = true;
-  }
+
+    if (verifyChecksum()) {
+      newCommandIsReady = true; 
+      //Serial.println(F("command verified"));
+    } else {
+      //Serial.println(F("command NOT verified"));
+      newData = false; // whatever was rxd from USB was bad, so we're just ignoring it and are now ready to receive more from USB
+    }
+ 
 
 }
 
+bool verifyChecksum() {
+
+    //Serial.println(F("...verifying.."));
+
+    if (strlen(command) < 1) return false;
+    if (strlen(randNum) < 1) return false;
+    if (strlen(chksum) < 1) return false;
+
+    //Serial.println(F("...still verifying.."));
+    long int cmd = atoi(command);
+    long int rnd = atoi(randNum);
+    long int chksm = atoi(chksum);
+    long int p1 = atoi(param1);
+    long int p2 = atoi(param2);
+
+    long int mySum = cmd + rnd + p1 + p2;
+/*
+    Serial.print(F("cmd["));
+    Serial.print(cmd);
+    Serial.print(F("]rnd["));
+    Serial.print(rnd);
+    Serial.print(F("]chksm["));
+    Serial.print(chksm);
+    Serial.print(F("]mySum["));
+    Serial.print(mySum);
+    Serial.println(F("]"));
+*/
+    if (mySum == chksm) {
+      return true;
+    } else {
+      return false;
+    }
+}
 
 void stopMotorsIfBeenTooLongSinceLastCommand() {
   if (motorM1Rotating || motorM2Rotating) {
