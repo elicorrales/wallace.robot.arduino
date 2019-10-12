@@ -6,7 +6,7 @@
 
 
 
-#define ARDUINO_USB_BAUD 9600           // NO USB ERRORS - WRONG CMD RXD - AFTER MULTIPLE TESTS - IT ALSO SEEMS A FAST ENOUGH BAUD FOR RESPONSIVENESS - NO NEED TO INCREASE
+//#define ARDUINO_USB_BAUD 9600           // NO USB ERRORS - WRONG CMD RXD - AFTER MULTIPLE TESTS - IT ALSO SEEMS A FAST ENOUGH BAUD FOR RESPONSIVENESS - NO NEED TO INCREASE
 //#define ARDUINO_USB_BAUD 19200
 //#define ARDUINO_USB_BAUD 57600
 //#define ARDUINO_USB_BAUD 74880
@@ -16,6 +16,8 @@
 //#define ARDUINO_USB_BAUD 230400
 //#define ARDUINO_USB_BAUD 250000
 //#define ARDUINO_USB_BAUD 500000
+//#define ARDUINO_USB_BAUD 1000000
+#define ARDUINO_USB_BAUD 2000000
 
 #define ARDUINO_SERIAL_TO_ROBOCLAW_BAUD 38400
 #define rcRxPin 10
@@ -25,7 +27,6 @@
 #define C2F(x) (x * C2F_FACTOR) + 32
 
 #define MAX_USB_RX_BUF 64
-#define MAX_CMD_BUF 4
 #define MAX_PARM_BUF 6
 
 
@@ -58,7 +59,8 @@ enum  COMMAND {
 char receivedChars[MAX_USB_RX_BUF];   // an array to store the received data
 
 /////////////// these small buffers store whatever was parsed from the above input USB serial buffer ////////////
-char command[MAX_CMD_BUF] = {'\0'};
+char numParms[MAX_PARM_BUF] = {'\0'};
+char command[MAX_PARM_BUF] = {'\0'};
 char randNum[MAX_PARM_BUF] = {'\0'};
 char chksum[MAX_PARM_BUF] = {'\0'};
 char param1[MAX_PARM_BUF]  = {'\0'};
@@ -71,10 +73,6 @@ bool newData = false;
 bool newCommandIsReady = false;
 bool respond = false;
 
-///////////// for every command we incr this.  the host can request this value. if arduino had reset, this value would
-///////////// start at 0 again, indicating a problem.
-long numCmdsRxdFromUSB = 0;
-String lastCmdRxdFromUSB = "none";
 
 /////////// stuff related to auto-sending status back to host /////////////////////////////////////
 bool continueToAutoSendStatusToHost = true;
@@ -91,9 +89,13 @@ char version[32];
 uint16_t volts = 0;
 int16_t amps1 = 0, amps2 = 0;
 uint16_t temp = 0;
-int32_t prevSpeedM1 = 0, prevSpeedM2 = 0;
 int32_t speedM1 = 0, speedM2 = 0;
 String lastError;
+///////////// for every command we incr this.  the host can request this value. if arduino had reset, this value would
+///////////// start at 0 again, indicating a problem.
+long numCmdsRxdFromUSB = 0;
+String lastCmdRxdFromUSB = "none";
+long numDroppedUsbPackets = 0;
 
 unsigned long prevMillisLastCommand = millis();
 unsigned long nowMillis = millis();
@@ -174,13 +176,14 @@ void commandHandler() {
 
     //////////////////// Arduino user - instructions /////////////////////////
     case MENU: //help - send list of available commands
-      getHelp();
+      showMenu();
       break;
     case CLRUSBERROR:
-	thereIsUsbError = false;
+	      thereIsUsbError = false;
         break;
     case RSTNUMUSBCMDS:
-	numCmdsRxdFromUSB = 0;
+	      numCmdsRxdFromUSB = 0;
+        numDroppedUsbPackets = 0;
         break;
     case STATUSSTOP:
         stopAutoSendingStatusToHost();
@@ -206,6 +209,7 @@ void commandHandler() {
       if (thereIsUsbError) return;
       moveForward();
       if (respond) readStatus();
+      respond = false;
       break;
     case BCKRESP:
       stopAutoSendingStatusToHost();
@@ -214,6 +218,7 @@ void commandHandler() {
       if (thereIsUsbError) return;
       moveBackward();
       if (respond) readStatus();
+      respond = false;
       break;
     case LFTRESP:
       stopAutoSendingStatusToHost();
@@ -222,6 +227,7 @@ void commandHandler() {
       if (thereIsUsbError) return;
       rotateLeft();
       if (respond) readStatus();
+      respond = false;
       break;
     case RITRESP:
       stopAutoSendingStatusToHost();
@@ -230,6 +236,7 @@ void commandHandler() {
       if (thereIsUsbError) return;
       rotateRight();
       if (respond) readStatus();
+      respond = false;
       break;
     
     default:
@@ -256,18 +263,18 @@ void commandHandler() {
 //////////////////// Arduino user - instructions functions /////////////////////////
 //////////////////// Arduino user - instructions functions /////////////////////////
 //////////////////// Arduino user - instructions functions /////////////////////////
-void getHelp() {
+void showMenu() {
   Serial.println("{\"msg\":\"20 - version\"}");
   Serial.println("{\"msg\":\"24 - one-time status\"}");
   Serial.println("{\"msg\":\"28 - stop motors\"}");
-  Serial.println("{\"msg\":\"29 - forward <spd> <spd>\"}");
-  Serial.println("{\"msg\":\"32 - back <spd> <spd>\"}");
-  Serial.println("{\"msg\":\"33 - left <spd> <spd>\"}");
-  Serial.println("{\"msg\":\"34 - right <spd> <spd>\"}");
-  Serial.println("{\"msg\":\"35 - fwd resp<spd> <spd>\"}");
-  Serial.println("{\"msg\":\"36 - back resp <spd> <spd>\"}");
-  Serial.println("{\"msg\":\"37 - left resp<spd> <spd>\"}");
-  Serial.println("{\"msg\":\"38 - right resp <spd> <spd>\"}");
+  Serial.println("{\"msg\":\"29 - forward <spd>\"}");
+  Serial.println("{\"msg\":\"32 - back <spd>\"}");
+  Serial.println("{\"msg\":\"33 - left <spd>\"}");
+  Serial.println("{\"msg\":\"34 - right <spd>\"}");
+  Serial.println("{\"msg\":\"35 - fwdresp <spd>\"}");
+  Serial.println("{\"msg\":\"36 - backresp <spd>\"}");
+  Serial.println("{\"msg\":\"37 - leftresp <spd>\"}");
+  Serial.println("{\"msg\":\"38 - rightresp <spd>\"}");
   Serial.println("{\"msg\":\"0 - help\"}");
   Serial.println("{\"msg\":\"1 - num cmds rxd\"}");
   Serial.println("{\"msg\":\"2 - stop auto send status\"}");
@@ -321,53 +328,31 @@ void readRcVersion() {
 }
 
 
-/*
-   Read Main Battery Voltage Level
-   Read the main battery voltage level connected to B+ and B- terminals.
-   The voltage is returned in 10ths of a volt(eg 300 = 30v).
-*/
-void readRcVoltage() {
 
+void readRcVoltage() {
   rcValid = false;
   volts = roboclaw.ReadMainBatteryVoltage(address, &rcValid);
   if (rcValid) {
-
   } else {
-
     volts = -1;
     thereIsRoboclawError = true;
   }
 }
 
-/*
-    Read Motor Currents
-   Read the current draw from each motor in 10ma increments.
-   The amps value is calculated by dividing the value by 100.
-*/
+
 void readRcCurrents() {
-
-
   if (roboclaw.ReadCurrents(address, amps1, amps2)) {
-
   } else {
-
     amps1 = -1;
     amps2 = -1;
     thereIsRoboclawError = true;
   }
-
 }
 
-/*
-   Read Temperature
-   Read the board temperature. Value returned is in 10ths of degrees.
-*/
+
 void readRcTemperature() {
-
   if (roboclaw.ReadTemp(address, temp)) {
-
   } else {
-
     temp = -1;
     thereIsRoboclawError = true;
   }
@@ -392,6 +377,8 @@ void readStatus() {
   results.concat(speedM2);
   results.concat(",\"cmds\":");
   results.concat(numCmdsRxdFromUSB);
+  results.concat(",\"drop\":");
+  results.concat(numDroppedUsbPackets);
   results.concat(",\"last\":");
   results.concat(lastCmdRxdFromUSB);
   if (thereIsUsbError) {
@@ -403,44 +390,38 @@ void readStatus() {
 }
 
 void readRcMotorSpeeds() {
-
-
   rcStatus = 0; rcValid = false;
   speedM1 = roboclaw.ReadSpeedM1(address, &rcStatus, &rcValid);
   if (!rcValid) {
-
     speedM1 = -1;
     thereIsRoboclawError = true;
   }
-
   rcStatus = 0; rcValid = false;
   speedM2 = roboclaw.ReadSpeedM2(address, &rcStatus, &rcValid);
   if (!rcValid) {
-
     speedM2 = -1;
     thereIsRoboclawError = true;
   }
-
 }
 
 void moveForward() {
   rotateLeftSideForward(param1);
-  rotateRightSideForward(param2);
+  rotateRightSideForward(param1);
 }
 
 void moveBackward() {
   rotateLeftSideBackward(param1);
-  rotateRightSideBackward(param2);
+  rotateRightSideBackward(param1);
 }
 
 void rotateLeft() {
   rotateLeftSideBackward(param1);
-  rotateRightSideForward(param2);
+  rotateRightSideForward(param1);
 }
 
 void rotateRight() {
   rotateLeftSideForward(param1);
-  rotateRightSideBackward(param2);
+  rotateRightSideBackward(param1);
 }
 
 void rotateLeftSideForward(char* param) {
@@ -535,7 +516,8 @@ void parseIncomingUsbSerial() {
 
   if (newData != true) return;
   
-    clearBuffer(command, MAX_CMD_BUF);
+    clearBuffer(numParms, MAX_PARM_BUF);
+    clearBuffer(command, MAX_PARM_BUF);
     clearBuffer(randNum, MAX_PARM_BUF);
     clearBuffer(chksum, MAX_PARM_BUF);
     clearBuffer(param1, MAX_PARM_BUF);
@@ -545,11 +527,38 @@ void parseIncomingUsbSerial() {
 
     
     byte ndx = 0;
+    byte pidx = 0;
+    byte sidx = 0;
+
+    /////   extract numParms out of the receive buffer
+    pidx = 0;
+    while (ndx < MAX_USB_RX_BUF && pidx < MAX_PARM_BUF - 1 && receivedChars[ndx] != '\n' && receivedChars[ndx] != ' ' && receivedChars[ndx] != '\t' && receivedChars[ndx] != '\r' && receivedChars[ndx] != 0) {
+      //Serial.print(ndx); Serial.print(", ["); Serial.print(receivedChars[ndx]); Serial.println("]");
+      numParms[ndx] = receivedChars[ndx];
+      ndx++;
+    }
+/*
+      Serial.print(F("numParms["));
+      Serial.print(numParms);
+      Serial.print(F("] "));
+      Serial.print(pidx);
+      Serial.print(F(" "));
+      Serial.println(ndx);
+*/
+    /////   need to get past whitespace (except newline)
+    sidx = 0;
+    while (ndx < MAX_USB_RX_BUF && (receivedChars[ndx] == ' ' || receivedChars[ndx] == '\t')) {
+      //Serial.print(ndx); Serial.print(", ["); Serial.print(receivedChars[ndx]); Serial.println("]");
+      ndx++;
+    }
+
 
     /////   extract  command out of the receive buffer
-    while (ndx < MAX_USB_RX_BUF && ndx < MAX_CMD_BUF - 1 && receivedChars[ndx] != '\n' && receivedChars[ndx] != ' ' && receivedChars[ndx] != '\t' && receivedChars[ndx] != '\r' && receivedChars[ndx] != 0) {
+    pidx = 0;
+    while (ndx < MAX_USB_RX_BUF && ndx < MAX_PARM_BUF - 1 && receivedChars[ndx] != '\n' && receivedChars[ndx] != ' ' && receivedChars[ndx] != '\t' && receivedChars[ndx] != '\r' && receivedChars[ndx] != 0) {
       //Serial.print(ndx); Serial.print(", ["); Serial.print(receivedChars[ndx]); Serial.println("]");
-      command[ndx] = receivedChars[ndx];
+      command[pidx] = receivedChars[ndx];
+      pidx++;
       ndx++;
     }
 /*
@@ -560,13 +569,12 @@ void parseIncomingUsbSerial() {
 */
 
     /////   need to get past whitespace (except newline)
-    byte sidx = 0;
+    sidx = 0;
     while (ndx < MAX_USB_RX_BUF && (receivedChars[ndx] == ' ' || receivedChars[ndx] == '\t')) {
       //Serial.print(ndx); Serial.print(", ["); Serial.print(receivedChars[ndx]); Serial.println("]");
       ndx++;
     }
 
-    byte pidx = 0;
 
     /////   extract randNum out of the receive buffer
     pidx = 0;
@@ -667,40 +675,43 @@ void parseIncomingUsbSerial() {
       newCommandIsReady = true; 
       //Serial.println(F("command verified"));
     } else {
+      numDroppedUsbPackets++;
       //Serial.println(F("command NOT verified"));
       newData = false; // whatever was rxd from USB was bad, so we're just ignoring it and are now ready to receive more from USB
     }
- 
+
 
 }
 
 bool verifyChecksum() {
 
-    //Serial.println(F("...verifying.."));
-
+    int numberOfUsbParameters = 0;
+    if (strlen(numParms) < 1) return false;
+    numberOfUsbParameters++;
     if (strlen(command) < 1) return false;
+    numberOfUsbParameters++;
     if (strlen(randNum) < 1) return false;
+    numberOfUsbParameters++;
     if (strlen(chksum) < 1) return false;
+    numberOfUsbParameters++;
+    if (strlen(param1) > 0) numberOfUsbParameters++;
+    if (strlen(param2) > 0) numberOfUsbParameters++;
 
     //Serial.println(F("...still verifying.."));
+    long int nParms = atoi(numParms);
+
+    //Serial.print(numberOfUsbParameters);Serial.print(' ');Serial.println(nParms);
+    if (numberOfUsbParameters != nParms) return false;
+    
     long int cmd = atoi(command);
     long int rnd = atoi(randNum);
     long int chksm = atoi(chksum);
     long int p1 = atoi(param1);
     long int p2 = atoi(param2);
 
-    long int mySum = cmd + rnd + p1 + p2;
-/*
-    Serial.print(F("cmd["));
-    Serial.print(cmd);
-    Serial.print(F("]rnd["));
-    Serial.print(rnd);
-    Serial.print(F("]chksm["));
-    Serial.print(chksm);
-    Serial.print(F("]mySum["));
-    Serial.print(mySum);
-    Serial.println(F("]"));
-*/
+    long int mySum = nParms + cmd + rnd + p1 + p2;
+
+    //Serial.print(cmd);Serial.print(' ');Serial.print(rnd);Serial.print(' ');Serial.print(chksum);Serial.print(' ');Serial.print(p1);Serial.print(' ');Serial.println(mySum);
     if (mySum == chksm) {
       return true;
     } else {
@@ -717,7 +728,6 @@ void stopMotorsIfBeenTooLongSinceLastCommand() {
   }
 }
 
-//void readRcVoltsAmpsTempIfBeenTooLongSinceLastTime() {
 void readStatusIfBeenTooLongSinceLastTime() {
     nowMillis = millis();
     if (continueToAutoSendStatusToHost && ((nowMillis - prevMillisLastTimeAutoSentStatus) > autoSendStatusTimeout)) {
