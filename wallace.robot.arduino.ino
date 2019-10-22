@@ -38,7 +38,7 @@
 #define MAX_RX_PARM_BUF 10
 #define MAX_TX_BUF 64
 
-#define DEFAULT_TIMEOUT_SEND_STATUS_TO_HOST 3000
+#define DEFAULT_TIMEOUT_SEND_STATUS_TO_HOST 50
 #define TIMEOUT_TO_STOP_MOTORS_LAST_HOST_CMD_BEEN_LONG_TIME 100
 
 
@@ -171,7 +171,7 @@ RoboClaw roboclaw(&serial, 10000);                  //38400
 
 void setup() {
   //Open Serial and roboclaw serial ports
-  Serial.begin(ARDUINO_USB_LOWEST_BAUD);
+  Serial.begin(ARDUINO_USB_HIGHEST_BAUD);
   while (!Serial);
   Serial.println(F("{\"msg\":\"Arduino Roboclaw Driver Is Up\"}"));
   roboclaw.begin(ARDUINO_SERIAL_TO_ROBOCLAW_BAUD);  //38400
@@ -415,6 +415,12 @@ void readStatus() {
   strncat(mainTxRxBuffer, c, strlen(c));
   memset(tempHoldingBuf,0x00,MAX_RX_PARM_BUF);
   itoa(numCmdsRxdFromUSB,tempHoldingBuf,10);
+  strncat(mainTxRxBuffer,tempHoldingBuf,strlen(tempHoldingBuf));
+  strncat(mainTxRxBuffer,sep,strlen(sep));    
+
+  strncat(mainTxRxBuffer, d, strlen(d));
+  memset(tempHoldingBuf,0x00,MAX_RX_PARM_BUF);
+  itoa(numDroppedUsbPackets,tempHoldingBuf,10);
   strncat(mainTxRxBuffer,tempHoldingBuf,strlen(tempHoldingBuf));
   strncat(mainTxRxBuffer,sep,strlen(sep));    
 
@@ -695,14 +701,14 @@ void parseIncomingUsbSerial() {
 
   if (verifyChecksum()) {
     newCommandIsReady = true;
-    Serial.println(F("command verified"));
+    //Serial.println(F("command verified"));
     thereIsUsbError = false;
     memset(lastError,0x00,MAX_TX_BUF);
 
     
   } else {
     numDroppedUsbPackets++;
-    Serial.println(F("command NOT verified"));
+    //Serial.println(F("command NOT verified"));
     newData = false; // whatever was rxd from USB was bad, so we're just ignoring it and are now ready to receive more from USB
   }
 
@@ -777,13 +783,13 @@ bool verifyChecksum() {
   
   long int mySum = nParms + cmd + rnd + (int)(p1f!=0?p1f*1000:p1) + (int)(p2f!=0?p2f*1000:p2);
 
-  Serial.print(" nParms:");Serial.print(nParms);
-  Serial.print(" cmd:");Serial.print(cmd);
-  Serial.print(" rnd:");Serial.print(rnd);
-  Serial.print(" p1:");Serial.print((int)(p1f!=0?p1f*1000:p1));
-  Serial.print(" p2:");Serial.print((int)(p2f!=0?p2f*1000:p2));
-  Serial.print(" mySum:");Serial.print(mySum);
-  Serial.print(" chksm:");Serial.println(chksm);
+//  Serial.print(" nParms:");Serial.print(nParms);
+//  Serial.print(" cmd:");Serial.print(cmd);
+//  Serial.print(" rnd:");Serial.print(rnd);
+//  Serial.print(" p1:");Serial.print((int)(p1f!=0?p1f*1000:p1));
+//  Serial.print(" p2:");Serial.print((int)(p2f!=0?p2f*1000:p2));
+//  Serial.print(" mySum:");Serial.print(mySum);
+//  Serial.print(" chksm:");Serial.println(chksm);
 
  
   if (mySum == chksm) {
