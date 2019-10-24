@@ -15,11 +15,11 @@
 
 
 #define ARDUINO_USB_LOWEST_BAUD 9600
-//#define ARDUINO_USB_BAUD 19200
-//#define ARDUINO_USB_BAUD 57600
+#define ARDUINO_USB_LOWER_BAUD 19200
+#define ARDUINO_USB_LOW_BAUD 57600
 //#define ARDUINO_USB_BAUD 74880
 
-#define ARDUINO_USB_MIDDLE_BAUD 115200
+//#define ARDUINO_USB_MIDDLE_BAUD 115200
 
 //#define ARDUINO_USB_BAUD 230400
 //#define ARDUINO_USB_BAUD 250000
@@ -50,14 +50,11 @@
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 enum COMMAND {
-  //MENU = 0,
-  ACKCMDS = 1,
   STATUSSTOP = 2,
   STATUSSTART = 3,
   CLRAllERRORS = 4,
   RSTNUMUSBCMDS = 5,
-  //MINSPD2CMD = 6,
-  VERSION = 20,
+  MOVETIMEOUT = 6,
   STATUS = 24,
   STOP = 28,
   FORWARD = 29,
@@ -74,17 +71,34 @@ const char* bJSON = "{";
 const char* eJSON = "}";
 const char* sep = ",";
 const char* v = "\"v\":";
-const char* a1= "\"a1\":";
-const char* a2= "\"a2\":";
+const char* a1 = "\"a1\":";
+const char* a2 = "\"a2\":";
 const char* t = "\"t\":";
-const char* s1= "\"s1\":";
-const char* s2= "\"s2\":";
+const char* s1 = "\"s1\":";
+const char* s2 = "\"s2\":";
 const char* c = "\"c\":";
 const char* d = "\"d\":";
 const char* l = "\"l\":";
 const char* e = "\"e\":";
+const char* m = "\"m\":";
 const char* quote = "\"";
-
+const char* errVolts   = "\"ERRVOLTS\"";
+const char* errAmps    = "\"ERRAMPS\"";
+const char* errTemp    = "\"ERRTEMP\"";
+const char* errSpdM1   = "\"ERRSPM1\"";
+const char* errSpdM2   = "\"ERRSPM2\"";
+const char* errRotM1F  = "\"ERRROTM1F\"";
+const char* errRotM2F  = "\"ERRROTM2F\"";
+const char* errRotM1B  = "\"ERRROTM1B\"";
+const char* errRotM2B  = "\"ERRROTM2B\"";
+const char* errStopM1  = "\"ERRSTOPM1\"";
+const char* errStopM2  = "\"ERRSTOPM2\"";
+const char* isEmptyStr = " is empty\"";
+const char* badChksum  = "\"Bad Chksum\"";
+const char* bRxdCmd    = "\"Rxd Cmd [";
+const char* bracketEOS = "]\"";
+const char* badNParms  = "\"Bad nParm\"";
+const char* bUnkCmd    = "\"UNKCMD [";
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -114,11 +128,20 @@ char param2[MAX_RX_PARM_BUF]  = {'\0'};
 
 bool userHasInitiatedArduino = false;
 bool thereIsRoboclawError = false;
+bool thereIsRoboclawVoltsError = false;
+bool thereIsRoboclawAmpsError = false;
+bool thereIsRoboclawTempError = false;
+bool thereIsRoboclawSpdM1Error = false;
+bool thereIsRoboclawSpdM2Error = false;
+bool thereIsRoboclawRotM1fError = false;
+bool thereIsRoboclawRotM2fError = false;
+bool thereIsRoboclawRotM1bError = false;
+bool thereIsRoboclawRotM2bError = false;
+bool thereIsRoboclawStopM1Error = false;
+bool thereIsRoboclawStopM2Error = false;
 bool thereIsUsbError = true;  //initialized to true, to force client program (Raspberry?  Browser?) to clear the flag
 bool newData = false;
 bool newCommandIsReady = false;
-bool respond = false;
-bool ackCommands = false;
 
 /////////// stuff related to auto-sending status back to host /////////////////////////////////////
 bool continueToAutoSendStatusToHost = true;
@@ -139,7 +162,7 @@ int p1  = -1;
 int p2  = -2;
 float p1f = -1.0;
 float p2f = -1.0;
-
+int movementTimeoutMs = TIMEOUT_TO_STOP_MOTORS_LAST_HOST_CMD_BEEN_LONG_TIME;
 char version[32];
 uint16_t volts = 0;
 int16_t amps1 = 0, amps2 = 0;
@@ -171,7 +194,7 @@ RoboClaw roboclaw(&serial, 10000);                  //38400
 
 void setup() {
   //Open Serial and roboclaw serial ports
-  Serial.begin(ARDUINO_USB_HIGHEST_BAUD);
+  Serial.begin(74880); //9600 19200 38400 57600 74880 115200 230400 250000 500000 1000000 2000000
   while (!Serial);
   Serial.println(F("{\"msg\":\"Arduino Roboclaw Driver Is Up\"}"));
   roboclaw.begin(ARDUINO_SERIAL_TO_ROBOCLAW_BAUD);  //38400
@@ -222,22 +245,17 @@ void commandHandler() {
   switch (cmd) {
 
     //////////////////// Arduino user - instructions /////////////////////////
-    //case MENU: //help - send list of available commands
-      //showMenu();
-      //break;
-    case ACKCMDS:
-      ackCommands = true;
-      break;
     case CLRAllERRORS:
       userHasInitiatedArduino = true;
       thereIsUsbError = false;
       thereIsRoboclawError = false;
-      ackCommands = false;
       break;
     case RSTNUMUSBCMDS:
       numCmdsRxdFromUSB = 0;
       numDroppedUsbPackets = 0;
       break;
+    case MOVETIMEOUT:
+      setMovementTimeoutMs();
     case STATUSSTOP:
       stopAutoSendingStatusToHost();
       break;
@@ -246,9 +264,6 @@ void commandHandler() {
       break;
 
     //////////////////// Roboclaw instructions /////////////////////////
-    case VERSION: //version
-      readRcVersion();
-      break;
     case STATUS: //read volts, amps, temp
       readStatus();
       break;
@@ -256,25 +271,36 @@ void commandHandler() {
       stopMotors();
       break;
     case FORWARD:
-      if (!userHasInitiatedArduino || thereIsUsbError || thereIsRoboclawError) { break; }
+      if (!userHasInitiatedArduino || thereIsUsbError || thereIsRoboclawError) {
+        break;
+      }
       moveForward();
       break;
     case BACKWARD:
-      if (!userHasInitiatedArduino || thereIsUsbError || thereIsRoboclawError) { break; }
+      if (!userHasInitiatedArduino || thereIsUsbError || thereIsRoboclawError) {
+        break;
+      }
       moveBackward();
       break;
     case LEFT:
-      if (!userHasInitiatedArduino || thereIsUsbError || thereIsRoboclawError) { break; }
+      if (!userHasInitiatedArduino || thereIsUsbError || thereIsRoboclawError) {
+        break;
+      }
       rotateLeft();
       break;
     case RIGHT:
-      if (!userHasInitiatedArduino || thereIsUsbError || thereIsRoboclawError) { break; }
+      if (!userHasInitiatedArduino || thereIsUsbError || thereIsRoboclawError) {
+        break;
+      }
       rotateRight();
       break;
 
     default:
-      memset(lastError,0x00,MAX_TX_BUF);
-      sprintf(lastError,"\"UNKCMD [%d]\"", lastCmdRxdFromUSB);
+      memset(lastError, 0x00, MAX_TX_BUF);
+      strncpy(lastError, bUnkCmd, strlen(bUnkCmd));
+      memset(tempHoldingBuf, 0x00, MAX_RX_PARM_BUF);
+      itoa(lastCmdRxdFromUSB, tempHoldingBuf, 10);
+      strncat(lastError, tempHoldingBuf, strlen(tempHoldingBuf));
       thereIsUsbError = true;
       stopMotors();
   }
@@ -286,13 +312,17 @@ void commandHandler() {
 
   newCommandIsReady = false;
   newData = false;
+
+
 }
 
 //////////////////// Arduino user - instructions functions /////////////////////////
 //////////////////// Arduino user - instructions functions /////////////////////////
 //////////////////// Arduino user - instructions functions /////////////////////////
 
-
+void setMovementTimeoutMs() {
+  movementTimeoutMs = p1;
+}
 
 void stopAutoSendingStatusToHost() {
   continueToAutoSendStatusToHost = false;
@@ -307,55 +337,56 @@ void startAutoSendingStatusToHost() {
 //////////////////// Roboclaw instructions ////////////////////////////////////////////
 //////////////////// Roboclaw instructions ////////////////////////////////////////////
 //////////////////// Roboclaw instructions ////////////////////////////////////////////
-void readRcVersion() {
-  for (byte i = 0; i < sizeof(version); i++) {
-    version[i] = 0;
-  }
-  if (roboclaw.ReadVersion(address, version)) {
-    memset(msg,0x00,MAX_TX_BUF);
-    sprintf(msg,"{\"version\":\"%s\"}", version);
-    Serial.println(msg);
-  } else {
-    memset(lastError,0x00,MAX_TX_BUF);
-    sprintf(lastError,"\"ERRVER\"");
-    thereIsRoboclawError = true;
-  }
+
+bool isRoboclawError() {
+  return thereIsRoboclawVoltsError ||
+         thereIsRoboclawAmpsError ||
+         thereIsRoboclawTempError ||
+         thereIsRoboclawSpdM1Error ||
+         thereIsRoboclawSpdM2Error ||
+         thereIsRoboclawRotM1fError ||
+         thereIsRoboclawRotM2fError ||
+         thereIsRoboclawRotM1bError ||
+         thereIsRoboclawRotM2bError ||
+         thereIsRoboclawStopM1Error ||
+         thereIsRoboclawStopM2Error;
 }
-
-
 
 void readRcVoltage() {
   rcValid = false;
+  thereIsRoboclawVoltsError = false;
   volts = roboclaw.ReadMainBatteryVoltage(address, &rcValid);
   if (rcValid) {
   } else {
     volts = -1;
-    memset(lastError,0x00,MAX_TX_BUF);
-    sprintf(lastError,"\"ERRVOLTS\"");
-    thereIsRoboclawError = true;
+    memset(lastError, 0x00, MAX_TX_BUF);
+    strncpy(lastError, errVolts, strlen(errVolts));
+    thereIsRoboclawVoltsError = true;
   }
 }
 
 
 void readRcCurrents() {
+  thereIsRoboclawAmpsError = false;
   if (roboclaw.ReadCurrents(address, amps1, amps2)) {
   } else {
     amps1 = -1;
     amps2 = -1;
-    memset(lastError,0x00,MAX_TX_BUF);
-    sprintf(lastError,"\"ERRAMPS\"");
-    thereIsRoboclawError = true;
+    memset(lastError, 0x00, MAX_TX_BUF);
+    strncpy(lastError, errAmps, strlen(errAmps));
+    thereIsRoboclawAmpsError = true;
   }
 }
 
 
 void readRcTemperature() {
   if (roboclaw.ReadTemp(address, temp)) {
+    thereIsRoboclawTempError = false;
   } else {
     temp = -1;
-    memset(lastError,0x00,MAX_TX_BUF);
-    sprintf(lastError,"\"ERRTEMP\"");
-    thereIsRoboclawError = true;
+    memset(lastError, 0x00, MAX_TX_BUF);
+    strncpy(lastError, errTemp, strlen(errTemp));
+    thereIsRoboclawTempError = true;
   }
 }
 
@@ -366,91 +397,90 @@ void getRoboclawStatus() {
     readRcCurrents();
     readRcTemperature();
     readRcMotorSpeeds();
+    thereIsRoboclawError = isRoboclawError();
+    if (userHasInitiatedArduino && !thereIsRoboclawError) {
+      memset(lastError, 0x00, MAX_TX_BUF);
+    }
+
     lastTimeReadRoboclawStatus = millis();
   }
 }
 
 void readStatus() {
 
-  memset(mainTxRxBuffer,0x00, MAX_USB_TX_RX_BUF);
+  memset(mainTxRxBuffer, 0x00, MAX_USB_TX_RX_BUF);
 
-  strncpy(mainTxRxBuffer,bJSON,strlen(bJSON));
+  strncpy(mainTxRxBuffer, bJSON, strlen(bJSON));
 
   strncat(mainTxRxBuffer, v, strlen(v));
-  memset(tempHoldingBuf,0x00,MAX_RX_PARM_BUF);
-  itoa(volts,tempHoldingBuf,10);
-  strncat(mainTxRxBuffer,tempHoldingBuf,strlen(tempHoldingBuf));
-  strncat(mainTxRxBuffer,sep,strlen(sep));    
+  memset(tempHoldingBuf, 0x00, MAX_RX_PARM_BUF);
+  itoa(volts, tempHoldingBuf, 10);
+  strncat(mainTxRxBuffer, tempHoldingBuf, strlen(tempHoldingBuf));
+  strncat(mainTxRxBuffer, sep, strlen(sep));
 
   strncat(mainTxRxBuffer, a1, strlen(a1));
-  memset(tempHoldingBuf,0x00,MAX_RX_PARM_BUF);
-  itoa(amps1,tempHoldingBuf,10);
-  strncat(mainTxRxBuffer,tempHoldingBuf,strlen(tempHoldingBuf));
-  strncat(mainTxRxBuffer,sep,strlen(sep));    
+  memset(tempHoldingBuf, 0x00, MAX_RX_PARM_BUF);
+  itoa(amps1, tempHoldingBuf, 10);
+  strncat(mainTxRxBuffer, tempHoldingBuf, strlen(tempHoldingBuf));
+  strncat(mainTxRxBuffer, sep, strlen(sep));
 
   strncat(mainTxRxBuffer, a2, strlen(a2));
-  memset(tempHoldingBuf,0x00,MAX_RX_PARM_BUF);
-  itoa(amps2,tempHoldingBuf,10);
-  strncat(mainTxRxBuffer,tempHoldingBuf,strlen(tempHoldingBuf));
-  strncat(mainTxRxBuffer,sep,strlen(sep));    
+  memset(tempHoldingBuf, 0x00, MAX_RX_PARM_BUF);
+  itoa(amps2, tempHoldingBuf, 10);
+  strncat(mainTxRxBuffer, tempHoldingBuf, strlen(tempHoldingBuf));
+  strncat(mainTxRxBuffer, sep, strlen(sep));
 
   strncat(mainTxRxBuffer, t, strlen(t));
-  memset(tempHoldingBuf,0x00,MAX_RX_PARM_BUF);
-  itoa(temp,tempHoldingBuf,10);
-  strncat(mainTxRxBuffer,tempHoldingBuf,strlen(tempHoldingBuf));
-  strncat(mainTxRxBuffer,sep,strlen(sep));    
+  memset(tempHoldingBuf, 0x00, MAX_RX_PARM_BUF);
+  itoa(temp, tempHoldingBuf, 10);
+  strncat(mainTxRxBuffer, tempHoldingBuf, strlen(tempHoldingBuf));
+  strncat(mainTxRxBuffer, sep, strlen(sep));
 
   strncat(mainTxRxBuffer, s1, strlen(s1));
-  memset(tempHoldingBuf,0x00,MAX_RX_PARM_BUF);
-  itoa(speedM1,tempHoldingBuf,10);
-  strncat(mainTxRxBuffer,tempHoldingBuf,strlen(tempHoldingBuf));
-  strncat(mainTxRxBuffer,sep,strlen(sep));    
+  memset(tempHoldingBuf, 0x00, MAX_RX_PARM_BUF);
+  itoa(speedM1, tempHoldingBuf, 10);
+  strncat(mainTxRxBuffer, tempHoldingBuf, strlen(tempHoldingBuf));
+  strncat(mainTxRxBuffer, sep, strlen(sep));
 
   strncat(mainTxRxBuffer, s2, strlen(s2));
-  memset(tempHoldingBuf,0x00,MAX_RX_PARM_BUF);
-  itoa(speedM2,tempHoldingBuf,10);
-  strncat(mainTxRxBuffer,tempHoldingBuf,strlen(tempHoldingBuf));
-  strncat(mainTxRxBuffer,sep,strlen(sep));    
+  memset(tempHoldingBuf, 0x00, MAX_RX_PARM_BUF);
+  itoa(speedM2, tempHoldingBuf, 10);
+  strncat(mainTxRxBuffer, tempHoldingBuf, strlen(tempHoldingBuf));
+  strncat(mainTxRxBuffer, sep, strlen(sep));
 
   strncat(mainTxRxBuffer, c, strlen(c));
-  memset(tempHoldingBuf,0x00,MAX_RX_PARM_BUF);
-  itoa(numCmdsRxdFromUSB,tempHoldingBuf,10);
-  strncat(mainTxRxBuffer,tempHoldingBuf,strlen(tempHoldingBuf));
-  strncat(mainTxRxBuffer,sep,strlen(sep));    
+  memset(tempHoldingBuf, 0x00, MAX_RX_PARM_BUF);
+  itoa(numCmdsRxdFromUSB, tempHoldingBuf, 10);
+  strncat(mainTxRxBuffer, tempHoldingBuf, strlen(tempHoldingBuf));
+  strncat(mainTxRxBuffer, sep, strlen(sep));
 
   strncat(mainTxRxBuffer, d, strlen(d));
-  memset(tempHoldingBuf,0x00,MAX_RX_PARM_BUF);
-  itoa(numDroppedUsbPackets,tempHoldingBuf,10);
-  strncat(mainTxRxBuffer,tempHoldingBuf,strlen(tempHoldingBuf));
-  strncat(mainTxRxBuffer,sep,strlen(sep));    
+  memset(tempHoldingBuf, 0x00, MAX_RX_PARM_BUF);
+  itoa(numDroppedUsbPackets, tempHoldingBuf, 10);
+  strncat(mainTxRxBuffer, tempHoldingBuf, strlen(tempHoldingBuf));
+  strncat(mainTxRxBuffer, sep, strlen(sep));
 
   strncat(mainTxRxBuffer, l, strlen(l));
-  memset(tempHoldingBuf,0x00,MAX_RX_PARM_BUF);
-  itoa(lastCmdRxdFromUSB,tempHoldingBuf,10);
-  strncat(mainTxRxBuffer,tempHoldingBuf,strlen(tempHoldingBuf));
+  memset(tempHoldingBuf, 0x00, MAX_RX_PARM_BUF);
+  itoa(lastCmdRxdFromUSB, tempHoldingBuf, 10);
+  strncat(mainTxRxBuffer, tempHoldingBuf, strlen(tempHoldingBuf));
 
   int lenOfError = strlen(lastError);
-  int lenOfTxRxBuf = strlen(mainTxRxBuffer);
+  int lenOfMsgBuf = strlen(msg);
 
   if (lenOfError > 0) {
-    strncat(mainTxRxBuffer,sep,strlen(sep));    
-    strncat(mainTxRxBuffer,e,strlen(e));    
-    strncat(mainTxRxBuffer,lastError,strlen(lastError));
+    strncat(mainTxRxBuffer, sep, strlen(sep));
+    strncat(mainTxRxBuffer, e, strlen(e));
+    strncat(mainTxRxBuffer, lastError, strlen(lastError));
   }
-/*
-  
 
-  int lenOfError = strlen(lastError);
-  int lenOfTxRxBuf = strlen(mainTxRxBuffer);
-
-  if (lenOfError > 0) {
-    strncat(mainTxRxBuffer,sep,strlen(sep));    
-    strncat(mainTxRxBuffer,e,strlen(e));    
-    strncat(mainTxRxBuffer,lastError,strlen(lastError));
-    strncat(mainTxRxBuffer,quote,strlen(quote));    
+  if (lenOfMsgBuf > 0) {
+    strncat(mainTxRxBuffer, sep, strlen(sep));
+    strncat(mainTxRxBuffer, m, strlen(m));
+    strncat(mainTxRxBuffer, msg, strlen(msg));
   }
-  */
-  strncat(mainTxRxBuffer,eJSON,strlen(eJSON));
+
+  strncat(mainTxRxBuffer, eJSON, strlen(eJSON));
 
   Serial.println(mainTxRxBuffer);
 
@@ -458,20 +488,22 @@ void readStatus() {
 
 void readRcMotorSpeeds() {
   rcStatus = 0; rcValid = false;
+  thereIsRoboclawSpdM1Error = false;
+  thereIsRoboclawSpdM2Error = false;
   speedM1 = roboclaw.ReadSpeedM1(address, &rcStatus, &rcValid);
   if (!rcValid) {
     speedM1 = -1;
-    memset(lastError,0x00,MAX_TX_BUF);
-    sprintf(lastError,"\"ERRSPDM1\"");
-    thereIsRoboclawError = true;
+    memset(lastError, 0x00, MAX_TX_BUF);
+    strncpy(lastError, errSpdM1, strlen(errSpdM1));
+    thereIsRoboclawSpdM1Error = true;
   }
   rcStatus = 0; rcValid = false;
   speedM2 = roboclaw.ReadSpeedM2(address, &rcStatus, &rcValid);
   if (!rcValid) {
     speedM2 = -1;
-    memset(lastError,0x00,MAX_TX_BUF);
-    sprintf(lastError,"\"ERRSPDM2\"");
-    thereIsRoboclawError = true;
+    memset(lastError, 0x00, MAX_TX_BUF);
+    strncpy(lastError, errSpdM2, strlen(errSpdM2));
+    thereIsRoboclawSpdM2Error = true;
   }
 }
 
@@ -496,12 +528,13 @@ void rotateRight() {
 }
 
 void rotateLeftSideForward(int speed) {
+  thereIsRoboclawRotM1fError = false;
   if (roboclaw.ForwardM1(address, speed)) {
     motorM1Rotating = true;
   } else {
-    memset(lastError,0x00,MAX_TX_BUF);
-    sprintf(lastError,"\"ERRROTM1F\"");
-    thereIsRoboclawError = true;
+    memset(lastError, 0x00, MAX_TX_BUF);
+    strncpy(lastError, errRotM1F, strlen(errRotM1F));
+    thereIsRoboclawRotM1fError = true;
   }
 }
 
@@ -509,48 +542,51 @@ void rotateRightSideForward(int speed) {
   if (roboclaw.ForwardM2(address, speed)) {
     motorM2Rotating = true;
   } else {
-    memset(lastError,0x00,MAX_TX_BUF);
-    sprintf(lastError,"\"ERRROTM2F\"");
-    thereIsRoboclawError = true;
+    memset(lastError, 0x00, MAX_TX_BUF);
+    strncpy(lastError, errRotM2F, strlen(errRotM2F));
   }
 }
 
 void stopMotors() {
   uint8_t speed = 0;
+  thereIsRoboclawStopM1Error = false;
+  thereIsRoboclawStopM2Error = false;
   currSpeedCommanded = 0;
   if (roboclaw.ForwardM1(address, speed)) {
     motorM1Rotating = false;
   } else {
-    memset(lastError,0x00,MAX_TX_BUF);
-    sprintf(lastError,"\"ERRSTOPM1\"");
-    thereIsRoboclawError = true;
+    memset(lastError, 0x00, MAX_TX_BUF);
+    strncpy(lastError, errStopM1, strlen(errStopM1));
+    thereIsRoboclawStopM1Error = true;
   }
   if (roboclaw.ForwardM2(address, speed)) {
     motorM2Rotating = false;
   } else {
-    memset(lastError,0x00,MAX_TX_BUF);
-    sprintf(lastError,"\"ERRSTOPM2\"");
-    thereIsRoboclawError = true;
+    memset(lastError, 0x00, MAX_TX_BUF);
+    strncpy(lastError, errStopM2, strlen(errStopM2));
+    thereIsRoboclawStopM2Error = true;
   }
 }
 
 void rotateLeftSideBackward(int speed) {
+  thereIsRoboclawRotM1bError = false;
   if (roboclaw.BackwardM1(address, speed)) {
     motorM1Rotating = true;
   } else {
-    memset(lastError,0x00,MAX_TX_BUF);
-    sprintf(lastError,"\"ERRROTM1B\"");
-    thereIsRoboclawError = true;
+    memset(lastError, 0x00, MAX_TX_BUF);
+    strncpy(lastError, errRotM1B, strlen(errRotM1B));
+    thereIsRoboclawRotM1bError = true;
   }
 }
 
 void rotateRightSideBackward(int speed) {
+  thereIsRoboclawRotM2bError = false;
   if (roboclaw.BackwardM2(address, speed)) {
     motorM2Rotating = true;
   } else {
-    memset(lastError,0x00,MAX_TX_BUF);
-    sprintf(lastError,"\"ERRROTM2B\"");
-    thereIsRoboclawError = true;
+    memset(lastError, 0x00, MAX_TX_BUF);
+    strncpy(lastError, errRotM2B, strlen(errRotM2B));
+    thereIsRoboclawRotM2bError = true;
   }
 }
 
@@ -588,12 +624,12 @@ void parseIncomingUsbSerial() {
 
   if (newData != true) return;
 
-  memset(numParms,0x00,MAX_RX_PARM_BUF);
-  memset(command,0x00,MAX_RX_PARM_BUF);
-  memset(randNum,0x00,MAX_RX_PARM_BUF);
-  memset(chksum,0x00,MAX_RX_PARM_BUF);
-  memset(param1,0x00,MAX_RX_PARM_BUF);
-  memset(param2,0x00,MAX_RX_PARM_BUF);
+  memset(numParms, 0x00, MAX_RX_PARM_BUF);
+  memset(command, 0x00, MAX_RX_PARM_BUF);
+  memset(randNum, 0x00, MAX_RX_PARM_BUF);
+  memset(chksum, 0x00, MAX_RX_PARM_BUF);
+  memset(param1, 0x00, MAX_RX_PARM_BUF);
+  memset(param2, 0x00, MAX_RX_PARM_BUF);
 
   //Serial.println("..parsing..");
 
@@ -697,15 +733,15 @@ void parseIncomingUsbSerial() {
     pidx++;
   }
 
-  memset(mainTxRxBuffer,0x00,MAX_USB_TX_RX_BUF);
+  memset(mainTxRxBuffer, 0x00, MAX_USB_TX_RX_BUF);
 
   if (verifyChecksum()) {
     newCommandIsReady = true;
     //Serial.println(F("command verified"));
     thereIsUsbError = false;
-    memset(lastError,0x00,MAX_TX_BUF);
+    memset(lastError, 0x00, MAX_TX_BUF);
 
-    
+
   } else {
     numDroppedUsbPackets++;
     //Serial.println(F("command NOT verified"));
@@ -718,11 +754,11 @@ void parseIncomingUsbSerial() {
 bool verifyRequiredIncomingStringToken(char* bufName, char* buf) {
   if (strlen(buf) < 1) {
 
-    if (ackCommands) {
-      memset(lastError,0x00,MAX_TX_BUF);
-      sprintf(lastError,"\"%s is empty.\"",bufName);
-      readStatus();
-    }
+    memset(msg, 0x00, MAX_TX_BUF);
+    memset(lastError, 0x00, MAX_TX_BUF);
+    strncpy(lastError, bufName, strlen(bufName));
+    strncat(lastError, isEmptyStr, strlen(isEmptyStr));
+    readStatus();
     return false;
   }
   return true;
@@ -732,19 +768,27 @@ bool verifyChecksum() {
 
   int numberOfUsbParameters = 0;
 
-  if (!verifyRequiredIncomingStringToken("numParms",numParms)) { return false; }
+  if (!verifyRequiredIncomingStringToken("numParms", numParms)) {
+    return false;
+  }
 
   numberOfUsbParameters++;
 
-  if (!verifyRequiredIncomingStringToken("command",command)) { return false; }
+  if (!verifyRequiredIncomingStringToken("command", command)) {
+    return false;
+  }
 
   numberOfUsbParameters++;
 
-  if (!verifyRequiredIncomingStringToken("randNum",randNum)) { return false; }
+  if (!verifyRequiredIncomingStringToken("randNum", randNum)) {
+    return false;
+  }
 
   numberOfUsbParameters++;
 
-  if (!verifyRequiredIncomingStringToken("chksum",chksum)) { return false; }
+  if (!verifyRequiredIncomingStringToken("chksum", chksum)) {
+    return false;
+  }
 
   numberOfUsbParameters++;
 
@@ -754,11 +798,10 @@ bool verifyChecksum() {
   nParms = atoi(numParms);
 
   if (numberOfUsbParameters != nParms) {
-    if (ackCommands) {
-      memset(lastError,0x00,MAX_TX_BUF);
-      sprintf(lastError,"\"nParms [%d] NOT correct.\"",nParms);
-      readStatus();
-    }
+    memset(lastError, 0x00, MAX_TX_BUF);
+    memset(msg, 0x00, MAX_TX_BUF);
+    strncpy(lastError, badNParms, strlen(badNParms));
+    readStatus();
     return false;
   }
 
@@ -770,48 +813,48 @@ bool verifyChecksum() {
   p2 = 0;
   p2f = 0;
   if (isDecimalValue(param1)) {
-    p1f =atof(param1);
+    p1f = atof(param1);
   } else {
     p1 = atoi(param1);
   }
   if (isDecimalValue(param2)) {
-    p2f =atof(param2);
+    p2f = atof(param2);
   } else {
     p2 = atoi(param2);
   }
-  
-  
-  long int mySum = nParms + cmd + rnd + (int)(p1f!=0?p1f*1000:p1) + (int)(p2f!=0?p2f*1000:p2);
 
-//  Serial.print(" nParms:");Serial.print(nParms);
-//  Serial.print(" cmd:");Serial.print(cmd);
-//  Serial.print(" rnd:");Serial.print(rnd);
-//  Serial.print(" p1:");Serial.print((int)(p1f!=0?p1f*1000:p1));
-//  Serial.print(" p2:");Serial.print((int)(p2f!=0?p2f*1000:p2));
-//  Serial.print(" mySum:");Serial.print(mySum);
-//  Serial.print(" chksm:");Serial.println(chksm);
 
- 
+  long int mySum = nParms + cmd + rnd + (int)(p1f != 0 ? p1f * 1000 : p1) + (int)(p2f != 0 ? p2f * 1000 : p2);
+
+  //  Serial.print(" nParms:");Serial.print(nParms);
+  //  Serial.print(" cmd:");Serial.print(cmd);
+  //  Serial.print(" rnd:");Serial.print(rnd);
+  //  Serial.print(" p1:");Serial.print((int)(p1f!=0?p1f*1000:p1));
+  //  Serial.print(" p2:");Serial.print((int)(p2f!=0?p2f*1000:p2));
+  //  Serial.print(" mySum:");Serial.print(mySum);
+  //  Serial.print(" chksm:");Serial.println(chksm);
+
+
   if (mySum == chksm) {
-    if (ackCommands) {
-      memset(msg,0x00,MAX_TX_BUF);
-      sprintf(msg,"{\"msg\":\"Arduino Rxd command [%d].\"}", cmd);
-      Serial.println(msg);
-    }
+    memset(msg, 0x00, MAX_TX_BUF);
+    memset(lastError, 0x00, MAX_TX_BUF);
+    strncpy(msg, bRxdCmd, strlen(bRxdCmd));
+    strncat(msg, command, strlen(command));
+    strncat(msg, bracketEOS, strlen(bracketEOS));
+    readStatus();
     return true;
   } else {
-    if (ackCommands) {
-      memset(lastError,0x00,MAX_TX_BUF);
-      sprintf(lastError,"\"Bad chksum\"");
-      readStatus();
-    }
+    memset(msg, 0x00, MAX_TX_BUF);
+    memset(lastError, 0x00, MAX_TX_BUF);
+    strncpy(lastError, badChksum, strlen(badChksum));
+    readStatus();
     return false;
   }
 }
 
 bool isDecimalValue(char* paramBuffer) {
   byte len = strlen(paramBuffer);
-  for (byte i=0; i<len; i++) {
+  for (byte i = 0; i < len; i++) {
     if (paramBuffer[i] == '.') {
       return true;
     }
@@ -822,7 +865,7 @@ bool isDecimalValue(char* paramBuffer) {
 
 void stopMotorsIfBeenTooLongSinceLastCommand() {
   if (motorM1Rotating || motorM2Rotating) {
-    if (millis() - prevMillisLastCommand > TIMEOUT_TO_STOP_MOTORS_LAST_HOST_CMD_BEEN_LONG_TIME) {
+    if (millis() - prevMillisLastCommand > movementTimeoutMs) {
       stopMotors();
     }
   }
