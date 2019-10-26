@@ -13,20 +13,6 @@
 #define MYDEBUG 0
 
 
-
-#define ARDUINO_USB_LOWEST_BAUD 9600
-#define ARDUINO_USB_LOWER_BAUD 19200
-#define ARDUINO_USB_LOW_BAUD 57600
-//#define ARDUINO_USB_BAUD 74880
-
-//#define ARDUINO_USB_MIDDLE_BAUD 115200
-
-//#define ARDUINO_USB_BAUD 230400
-//#define ARDUINO_USB_BAUD 250000
-//#define ARDUINO_USB_BAUD 500000
-//#define ARDUINO_USB_BAUD 1000000
-#define ARDUINO_USB_HIGHEST_BAUD 2000000
-
 #define ARDUINO_SERIAL_TO_ROBOCLAW_BAUD 38400
 #define rcRxPin 10
 #define rcTxPin 11
@@ -70,18 +56,20 @@ enum COMMAND {
 const char* bJSON = "{";
 const char* eJSON = "}";
 const char* sep = ",";
-const char* v = "\"v\":";
-const char* a1 = "\"a1\":";
-const char* a2 = "\"a2\":";
-const char* t = "\"t\":";
-const char* s1 = "\"s1\":";
-const char* s2 = "\"s2\":";
-const char* c = "\"c\":";
-const char* d = "\"d\":";
-const char* l = "\"l\":";
-const char* e = "\"e\":";
-const char* m = "\"m\":";
+const char* v = "\"v\":";                 //volts
+const char* a1 = "\"a1\":";               //amps1
+const char* a2 = "\"a2\":";               //amps2
+const char* t = "\"t\":";                 //temp
+const char* s1 = "\"s1\":";               //speed M1
+const char* s2 = "\"s2\":";               //speed M2
+const char* c = "\"c\":";                 //num commands received
+const char* d = "\"d\":";                 //num rxd dropped usb strings
+const char* l = "\"l\":";                 //the last command received
+const char* p1str= "\"p1\":";                //the last param1 received
+const char* e = "\"e\":";                 //error
+const char* m = "\"m\":";                 //message
 const char* quote = "\"";
+const char* negOne  = "-1";
 const char* errVolts   = "\"ERRVOLTS\"";
 const char* errAmps    = "\"ERRAMPS\"";
 const char* errTemp    = "\"ERRTEMP\"";
@@ -94,11 +82,11 @@ const char* errRotM2B  = "\"ERRROTM2B\"";
 const char* errStopM1  = "\"ERRSTOPM1\"";
 const char* errStopM2  = "\"ERRSTOPM2\"";
 const char* isEmptyStr = " is empty\"";
-const char* badChksum  = "\"Bad Chksum\"";
+const char* badChksum  = "\"Bad Chksum [";
 const char* bRxdCmd    = "\"Rxd Cmd [";
-const char* bracketEOS = "]\"";
-const char* badNParms  = "\"Bad nParm\"";
+const char* badNParms  = "\"Bad nParm [";
 const char* bUnkCmd    = "\"UNKCMD [";
+const char* bracketEOS = "]\"";
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -194,7 +182,7 @@ RoboClaw roboclaw(&serial, 10000);                  //38400
 
 void setup() {
   //Open Serial and roboclaw serial ports
-  Serial.begin(74880); //9600 19200 38400 57600 74880 115200 230400 250000 500000 1000000 2000000
+  Serial.begin(115200); //9600 19200 38400 57600 74880 115200 230400 250000 500000 1000000 2000000
   while (!Serial);
   Serial.println(F("{\"msg\":\"Arduino Roboclaw Driver Is Up\"}"));
   roboclaw.begin(ARDUINO_SERIAL_TO_ROBOCLAW_BAUD);  //38400
@@ -298,11 +286,11 @@ void commandHandler() {
     default:
       memset(lastError, 0x00, MAX_TX_BUF);
       strncpy(lastError, bUnkCmd, strlen(bUnkCmd));
-      memset(tempHoldingBuf, 0x00, MAX_RX_PARM_BUF);
-      itoa(lastCmdRxdFromUSB, tempHoldingBuf, 10);
-      strncat(lastError, tempHoldingBuf, strlen(tempHoldingBuf));
+      strncat(lastError, command, strlen(command));
+      strncat(lastError, bracketEOS, strlen(bracketEOS));
       thereIsUsbError = true;
       stopMotors();
+      readStatus();
   }
 
   //this may be optional.. but the Roboclaw takes a certain amount of time to do stuff
@@ -462,8 +450,23 @@ void readStatus() {
 
   strncat(mainTxRxBuffer, l, strlen(l));
   memset(tempHoldingBuf, 0x00, MAX_RX_PARM_BUF);
-  itoa(lastCmdRxdFromUSB, tempHoldingBuf, 10);
-  strncat(mainTxRxBuffer, tempHoldingBuf, strlen(tempHoldingBuf));
+  //itoa(lastCmdRxdFromUSB, tempHoldingBuf, 10);
+  //strncat(mainTxRxBuffer, tempHoldingBuf, strlen(tempHoldingBuf));
+  if (strlen(command) > 0) {
+    strncat(mainTxRxBuffer, command, strlen(command));
+  } else {
+    strncat(mainTxRxBuffer, negOne, strlen(negOne));
+  }
+  strncat(mainTxRxBuffer, sep, strlen(sep));
+
+  strncat(mainTxRxBuffer, p1str, strlen(p1str));
+  //memset(tempHoldingBuf, 0x00, MAX_RX_PARM_BUF);
+  //itoa(lastCmdRxdFromUSB, tempHoldingBuf, 10);
+  if (strlen(param1) > 0) {
+    strncat(mainTxRxBuffer, param1, strlen(param1));
+  } else {
+    strncat(mainTxRxBuffer, negOne, strlen(negOne));
+  }
 
   int lenOfError = strlen(lastError);
   int lenOfMsgBuf = strlen(msg);
@@ -756,7 +759,8 @@ bool verifyRequiredIncomingStringToken(char* bufName, char* buf) {
 
     memset(msg, 0x00, MAX_TX_BUF);
     memset(lastError, 0x00, MAX_TX_BUF);
-    strncpy(lastError, bufName, strlen(bufName));
+    strncpy(lastError, quote, strlen(quote));
+    strncat(lastError, bufName, strlen(bufName));
     strncat(lastError, isEmptyStr, strlen(isEmptyStr));
     readStatus();
     return false;
@@ -801,6 +805,8 @@ bool verifyChecksum() {
     memset(lastError, 0x00, MAX_TX_BUF);
     memset(msg, 0x00, MAX_TX_BUF);
     strncpy(lastError, badNParms, strlen(badNParms));
+    strncat(lastError, numParms, strlen(numParms));
+    strncat(lastError, bracketEOS, strlen(bracketEOS));
     readStatus();
     return false;
   }
@@ -847,6 +853,8 @@ bool verifyChecksum() {
     memset(msg, 0x00, MAX_TX_BUF);
     memset(lastError, 0x00, MAX_TX_BUF);
     strncpy(lastError, badChksum, strlen(badChksum));
+    strncat(lastError, chksum, strlen(chksum));
+    strncat(lastError, bracketEOS, strlen(bracketEOS));
     readStatus();
     return false;
   }
