@@ -222,8 +222,6 @@ void commandHandler() {
 
   if (!newCommandIsReady) return;
 
-  prevMillisLastCommand = millis();
-
   if (cmd != STATUS) {
     lastCmdRxdFromUSB = -1; lastCmdRxdFromUSB = cmd;
     numCmdsRxdFromUSB++;
@@ -244,13 +242,14 @@ void commandHandler() {
       break;
     case MOVETIMEOUT:
       setMovementTimeoutMs();
+/*
     case STATUSSTOP:
       stopAutoSendingStatusToHost();
       break;
     case STATUSSTART:
       startAutoSendingStatusToHost();
       break;
-
+*/
     //////////////////// Roboclaw instructions /////////////////////////
     case STATUS: //read volts, amps, temp
       readStatus();
@@ -259,24 +258,28 @@ void commandHandler() {
       stopMotors();
       break;
     case FORWARD:
+      prevMillisLastCommand = millis();
       if (!userHasInitiatedArduino || thereIsUsbError || thereIsRoboclawError) {
         break;
       }
       moveForward();
       break;
     case BACKWARD:
+      prevMillisLastCommand = millis();
       if (!userHasInitiatedArduino || thereIsUsbError || thereIsRoboclawError) {
         break;
       }
       moveBackward();
       break;
     case LEFT:
+      prevMillisLastCommand = millis();
       if (!userHasInitiatedArduino || thereIsUsbError || thereIsRoboclawError) {
         break;
       }
       rotateLeft();
       break;
     case RIGHT:
+      prevMillisLastCommand = millis();
       if (!userHasInitiatedArduino || thereIsUsbError || thereIsRoboclawError) {
         break;
       }
