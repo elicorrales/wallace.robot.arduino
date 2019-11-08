@@ -24,7 +24,7 @@
 #define MAX_RX_PARM_BUF 10
 #define MAX_TX_BUF 64
 
-#define DEFAULT_TIMEOUT_SEND_STATUS_TO_HOST 50
+#define DEFAULT_TIMEOUT_SEND_STATUS_TO_HOST 30
 #define TIMEOUT_TO_STOP_MOTORS_LAST_HOST_CMD_BEEN_LONG_TIME 100
 
 
@@ -36,8 +36,8 @@
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 enum COMMAND {
-  STATUSSTOP = 2,
-  STATUSSTART = 3,
+//  STATUSSTOP = 2,
+//  STATUSSTART = 3,
   CLRAllERRORS = 4,
   RSTNUMUSBCMDS = 5,
   MOVETIMEOUT = 6,
@@ -132,6 +132,7 @@ bool newData = false;
 bool newCommandIsReady = false;
 
 /////////// stuff related to auto-sending status back to host /////////////////////////////////////
+
 bool continueToAutoSendStatusToHost = true;
 unsigned long prevMillisLastTimeAutoSentStatus = millis();
 unsigned long autoSendStatusTimeout = DEFAULT_TIMEOUT_SEND_STATUS_TO_HOST;
