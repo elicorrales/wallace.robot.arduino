@@ -19,10 +19,11 @@
 #define C2F_FACTOR 9/5
 #define C2F(x) (x * C2F_FACTOR) + 32
 
+#define MAX_USB_TX_RX_BUF 256
 #define MAX_RX_PARM_BUF 11
 #define MAX_TX_BUF 64
 
-#define DEFAULT_TIMEOUT_SEND_STATUS_TO_HOST 2000 //30
+#define DEFAULT_TIMEOUT_SEND_STATUS_TO_HOST 30
 #define TIMEOUT_TO_STOP_MOTORS_LAST_HOST_CMD_BEEN_LONG_TIME 100
 
 #define  ENDMARKER '\n'
@@ -432,7 +433,7 @@ void readStatus() {
   itoa(amps2, tempHoldingBuf, 10);
   strncat(mainTxRxBuffer, tempHoldingBuf, strlen(tempHoldingBuf));
   strncat(mainTxRxBuffer, sep, strlen(sep));
-
+/*
   strncat(mainTxRxBuffer, t, strlen(t));
   memset(tempHoldingBuf, 0x00, MAX_RX_PARM_BUF);
   itoa(temp, tempHoldingBuf, 10);
@@ -493,7 +494,7 @@ void readStatus() {
     strncat(mainTxRxBuffer, m, strlen(m));
     strncat(mainTxRxBuffer, msg, strlen(msg));
   }
-
+*/
   strncat(mainTxRxBuffer, eJSON, strlen(eJSON));
 
   Serial.println(mainTxRxBuffer);
